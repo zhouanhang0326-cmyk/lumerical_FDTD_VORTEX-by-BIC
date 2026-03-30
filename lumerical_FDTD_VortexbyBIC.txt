@@ -1,0 +1,462 @@
+# ============================================================
+# vortex_leishi_2024_corrected_crosspol.lsf
+#
+# 2024-compatible Lumerical FDTD script
+#
+# Main correction:
+# For LCP incidence: (Ex, Ey) ~ (1, +i)
+#   co-pol    ~ Ex - i*Ey   (LCP channel)
+#   cross-pol ~ Ex + i*Ey   (RCP channel, generated beam)
+#
+# The paper's Fig. S1(c) should be compared with:
+#   generated beam profile  ~ |E_cross|^2
+#   generated Ex phase      ~ angle(E_cross)
+#
+# This script outputs BOTH:
+#   1) raw total Ex diagnostics
+#   2) generated beam results after cross-pol extraction
+# ============================================================
+
+if (layoutmode==0) { switchtolayout; }
+deleteall;
+
+# -----------------------------
+# Units
+# -----------------------------
+um = 1e-6;
+nm = 1e-9;
+fs = 1e-15;
+
+# -----------------------------
+# Basic optical parameters
+# -----------------------------
+lambda0 = 0.532*um;
+wl_span = 0.0532*um;
+
+wl_start = lambda0 - wl_span/2;
+wl_stop  = lambda0 + wl_span/2;
+
+# -----------------------------
+# Structure parameters
+# -----------------------------
+P       = 0.380*um;
+slab_t  = 0.120*um;
+D       = 0.280*um;
+n_slab  = 2.06;
+
+# Requested finite array size
+Nx_periods = 100;
+Ny_periods = 100;
+
+active_x_span = Nx_periods*P;
+active_y_span = Ny_periods*P;
+
+# -----------------------------
+# Beam definition
+# Use the same nominal beam parameters as Fig. S1:
+#   divergence angle = 3 deg
+#   incident beam size = 7.5 um
+#
+# Interpretation used here:
+#   3 deg = half-angle
+#   7.5 um = beam diameter at sample plane
+# -----------------------------
+theta_div_deg = 3;
+theta_is_full_angle = 0;
+
+beam_size_sample = 7.5*um;
+beam_size_is_diameter = 1;
+
+if (theta_is_full_angle==1) {
+  theta_half = theta_div_deg*pi/180/2;
+} else {
+  theta_half = theta_div_deg*pi/180;
+}
+
+if (beam_size_is_diameter==1) {
+  w_sample = beam_size_sample/2;
+} else {
+  w_sample = beam_size_sample;
+}
+
+w_waist = lambda0/(pi*theta_half);
+zR = pi*w_waist^2/lambda0;
+
+# -----------------------------
+# Simulation region / z positions
+# -----------------------------
+xy_buffer = 1.0*um;
+air_below = 1.2*um;
+air_above = 1.2*um;
+
+Lx = active_x_span + 2*xy_buffer;
+Ly = active_y_span + 2*xy_buffer;
+Lz = slab_t + air_below + air_above;
+
+z_slab = 0;
+z_sample = -slab_t/2;
+
+z_src = -slab_t/2 - 0.50*um;
+z_nf  =  slab_t/2 + 0.50*um;
+
+if (w_sample < w_waist) {
+  ? "ERROR: beam size at sample is smaller than the Gaussian waist.";
+  ? "Check the interpretation of divergence angle or beam size.";
+}
+
+z_sample_to_waist = zR*sqrt((w_sample/w_waist)^2 - 1);
+z_waist = z_sample + z_sample_to_waist;
+source_to_waist = z_waist - z_src;
+
+? "-----------------------------------------";
+? "Gaussian beam consistency check";
+? "w_sample (1/e radius) = " + num2str(w_sample/um) + " um";
+? "w_waist  (1/e radius) = " + num2str(w_waist/um) + " um";
+? "Rayleigh range        = " + num2str(zR/um) + " um";
+? "sample -> waist       = " + num2str(z_sample_to_waist/um) + " um";
+? "source -> waist       = " + num2str(source_to_waist/um) + " um";
+? "-----------------------------------------";
+
+# -----------------------------
+# Mesh
+# -----------------------------
+dx_mesh = lambda0/12;
+
+# -----------------------------
+# Observation planes
+# -----------------------------
+z_planes = [100,200,300,400]*um;
+
+z_side_start = 1*um;
+z_side_stop  = 400*um;
+n_side       = 81;
+z_side = linspace(z_side_start, z_side_stop, n_side);
+
+obs_span = 50*um;
+n_obs = 201;
+
+xs = linspace(-obs_span/2, obs_span/2, n_obs);
+ys = linspace(-obs_span/2, obs_span/2, n_obs);
+
+center_ind = round((n_obs+1)/2);
+
+# -----------------------------
+# Global settings
+# -----------------------------
+setglobalsource("wavelength start",wl_start);
+setglobalsource("wavelength stop",wl_stop);
+
+setglobalmonitor("use source limits",1);
+setglobalmonitor("frequency points",1);
+
+# -----------------------------
+# FDTD region
+# -----------------------------
+addfdtd;
+
+set("x",0);
+set("y",0);
+set("z",0);
+
+set("x span",Lx);
+set("y span",Ly);
+set("z span",Lz);
+
+set("index",1.0);
+
+set("x min bc","PML");
+set("x max bc","PML");
+set("y min bc","PML");
+set("y max bc","PML");
+set("z min bc","PML");
+set("z max bc","PML");
+
+set("pml profile",1);
+
+# 12 ps
+set("simulation time",12000*fs);
+set("auto shutoff min",1e-7);
+
+# -----------------------------
+# Mesh override
+# -----------------------------
+addmesh;
+
+set("x",0);
+set("y",0);
+set("z",0);
+
+set("x span",Lx);
+set("y span",Ly);
+set("z span",Lz);
+
+set("override x mesh",1);
+set("override y mesh",1);
+set("override z mesh",1);
+
+set("dx",dx_mesh);
+set("dy",dx_mesh);
+set("dz",dx_mesh);
+
+# -----------------------------
+# Slab
+# -----------------------------
+addrect;
+
+set("x",0);
+set("y",0);
+set("z",z_slab);
+
+set("x span",active_x_span);
+set("y span",active_y_span);
+set("z span",slab_t);
+
+set("material","<Object defined dielectric>");
+set("index",n_slab);
+
+# -----------------------------
+# Hole array
+# -----------------------------
+x_start = -(Nx_periods-1)*P/2;
+y_start = -(Ny_periods-1)*P/2;
+
+redrawoff;
+for (ix=1:Nx_periods) {
+  x0 = x_start + (ix-1)*P;
+
+  for (iy=1:Ny_periods) {
+    y0 = y_start + (iy-1)*P;
+
+    addcircle;
+    set("x",x0);
+    set("y",y0);
+    set("z",z_slab);
+    set("radius",D/2);
+    set("z span",slab_t);
+    set("material","etch");
+  }
+}
+redrawon;
+
+# -----------------------------
+# LCP Gaussian pulse
+# Convention here:
+#   Ex = 1
+#   Ey = +i
+# -----------------------------
+addgaussian;
+set("injection axis","z");
+set("direction","forward");
+
+set("x",0);
+set("y",0);
+set("z",z_src);
+
+set("x span",active_x_span);
+set("y span",active_y_span);
+
+set("use scalar approximation",1);
+set("waist radius w0",w_waist);
+set("distance from waist",source_to_waist);
+
+set("amplitude",1);
+set("phase",0);
+set("polarization angle",0);
+
+addgaussian;
+set("injection axis","z");
+set("direction","forward");
+
+set("x",0);
+set("y",0);
+set("z",z_src);
+
+set("x span",active_x_span);
+set("y span",active_y_span);
+
+set("use scalar approximation",1);
+set("waist radius w0",w_waist);
+set("distance from waist",source_to_waist);
+
+set("amplitude",1);
+set("phase",90);
+set("polarization angle",90);
+
+# -----------------------------
+# Near-field monitor
+# -----------------------------
+addprofile;
+nf_name = get("name");
+
+set("monitor type",7);   # 2D Z-normal
+set("x",0);
+set("y",0);
+set("z",z_nf);
+
+set("x span",active_x_span);
+set("y span",active_y_span);
+
+# -----------------------------
+# Run
+# -----------------------------
+run;
+
+# ============================================================
+# Post-processing
+# ============================================================
+
+# ------------------------------------------------------------
+# IMPORTANT:
+# For LCP incidence:
+#   E_L = (Ex - iEy)/sqrt(2)   -> co-pol
+#   E_R = (Ex + iEy)/sqrt(2)   -> cross-pol generated beam
+#
+# Fig. S1(c)-style comparison should use:
+#   generated beam profile   = |E_R|^2
+#   generated Ex phase       = angle(E_R)
+#
+# Raw total Ex is retained only as a diagnostic quantity.
+# ------------------------------------------------------------
+
+# -----------------------------
+# Side-view data
+# -----------------------------
+side_raw_Ex = matrix(length(z_side), n_obs);
+side_gen    = matrix(length(z_side), n_obs);
+
+for (k=1:length(z_side)) {
+
+  z_now = z_side(k);
+
+  E_far = farfieldexact3d(nf_name, xs, ys, z_now, {"field":"E","f":1});
+
+  Ex_ff = pinch(E_far,4,1);
+  Ey_ff = pinch(E_far,4,2);
+
+  Ex_ff = pinch(Ex_ff,3,1);
+  Ey_ff = pinch(Ey_ff,3,1);
+
+  # circular basis decomposition
+  E_L = (Ex_ff - 1i*Ey_ff)/sqrt(2);   # co-pol for LCP input
+  E_R = (Ex_ff + 1i*Ey_ff)/sqrt(2);   # cross-pol generated beam
+
+  I_raw_Ex_line = abs(Ex_ff(:,center_ind))^2;
+  I_gen_line    = abs(E_R(:,center_ind))^2;
+
+  for (ix=1:n_obs) {
+    side_raw_Ex(k,ix) = I_raw_Ex_line(ix);
+    side_gen(k,ix)    = I_gen_line(ix);
+  }
+}
+
+max_side_raw_Ex = max(max(side_raw_Ex));
+if (max_side_raw_Ex > 0) {
+  side_raw_Ex = side_raw_Ex/max_side_raw_Ex;
+}
+
+max_side_gen = max(max(side_gen));
+if (max_side_gen > 0) {
+  side_gen = side_gen/max_side_gen;
+}
+
+image(z_side/um, xs/um, side_raw_Ex,
+      "z (um)",
+      "x (um)",
+      "Side-view from raw total Ex intensity");
+
+image(z_side/um, xs/um, side_gen,
+      "z (um)",
+      "x (um)",
+      "Side-view from generated beam intensity (cross-pol)");
+
+matlabsave("side_view_corrected_crosspol", z_side, xs, side_raw_Ex, side_gen);
+
+# -----------------------------
+# Sliced planes
+# -----------------------------
+for (k=1:length(z_planes)) {
+
+  z_now = z_planes(k);
+
+  E_far = farfieldexact3d(nf_name, xs, ys, z_now, {"field":"E","f":1});
+
+  Ex_ff = pinch(E_far,4,1);
+  Ey_ff = pinch(E_far,4,2);
+
+  Ex_ff = pinch(Ex_ff,3,1);
+  Ey_ff = pinch(Ey_ff,3,1);
+
+  # circular decomposition
+  E_L = (Ex_ff - 1i*Ey_ff)/sqrt(2);   # co-pol
+  E_R = (Ex_ff + 1i*Ey_ff)/sqrt(2);   # cross-pol generated beam
+
+  # Raw total Ex diagnostics
+  I_raw_Ex     = abs(Ex_ff)^2;
+  phase_raw_Ex = angle(Ex_ff);
+
+  # Generated beam results (the ones to compare with the paper)
+  I_gen        = abs(E_R)^2;
+  phase_gen    = angle(E_R);   # same as generated Ex phase up to constant factor
+
+  # Optional: co-pol diagnostics
+  I_co         = abs(E_L)^2;
+  phase_co     = angle(E_L);
+
+  # Normalize intensity maps for display
+  tmp = max(max(I_raw_Ex));
+  if (tmp > 0) {
+    I_raw_Ex = I_raw_Ex/tmp;
+  }
+
+  tmp = max(max(I_gen));
+  if (tmp > 0) {
+    I_gen = I_gen/tmp;
+  }
+
+  tmp = max(max(I_co));
+  if (tmp > 0) {
+    I_co = I_co/tmp;
+  }
+
+  # ---- raw total Ex diagnostics ----
+  image(xs/um, ys/um, I_raw_Ex,
+        "x (um)",
+        "y (um)",
+        "Raw total Ex intensity, z = " + num2str(z_now/um) + " um");
+
+  image(xs/um, ys/um, phase_raw_Ex,
+        "x (um)",
+        "y (um)",
+        "Raw total Ex phase, z = " + num2str(z_now/um) + " um");
+
+  # ---- generated beam outputs: compare these with Fig. S1(c) ----
+  image(xs/um, ys/um, I_gen,
+        "x (um)",
+        "y (um)",
+        "Generated beam intensity (cross-pol), z = " + num2str(z_now/um) + " um");
+
+  image(xs/um, ys/um, phase_gen,
+        "x (um)",
+        "y (um)",
+        "Generated beam Ex phase (from cross-pol), z = " + num2str(z_now/um) + " um");
+
+  # ---- co-pol diagnostics ----
+  image(xs/um, ys/um, I_co,
+        "x (um)",
+        "y (um)",
+        "Co-pol intensity, z = " + num2str(z_now/um) + " um");
+
+  image(xs/um, ys/um, phase_co,
+        "x (um)",
+        "y (um)",
+        "Co-pol phase, z = " + num2str(z_now/um) + " um");
+
+  matlabsave("ff_corrected_z_" + num2str(z_now/um) + "um",
+             xs, ys, Ex_ff, Ey_ff, E_L, E_R,
+             I_raw_Ex, phase_raw_Ex,
+             I_gen, phase_gen,
+             I_co, phase_co);
+}
+
+? "Corrected cross-polarized post-processing completed.";
+? "For LCP incidence, generated beam = RCP cross-pol channel = (Ex + iEy)/sqrt(2).";
